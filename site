@@ -1,18 +1,80 @@
 import React, { useState, useRef, useEffect } from "react";
+// Assuming these are shadcn/ui components and are available in your project
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import * as Tone from 'tone'; // Import Tone.js
+
+// Helper function to create a basic version of Input if not available
+const FallbackInput = React.forwardRef(({ className, ...props }, ref) => (
+  <input ref={ref} className={`p-2 border rounded-md ${className}`} {...props} />
+));
+
+// Helper function to create a basic version of Button if not available
+const FallbackButton = ({ className, children, ...props }) => (
+  <button className={`p-2 bg-blue-500 text-white rounded-md ${className}`} {...props}>
+    {children}
+  </button>
+);
+
+// Use actual components if available, otherwise fallbacks (for environments where "@/components/ui/*" might not resolve)
+const ChatInput = Input || FallbackInput;
+const ChatButton = Button || FallbackButton;
+
 
 export default function ChatScreen() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
-  const audioRef = useRef(null);
   const messagesEndRef = useRef(null);
 
-  const fakeAIReply = async (userInput) => {
-    // Replace with actual AI call
-    await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate network delay
-    return `You said: "${userInput}". Ask me something deeper. 😉`;
+  const getGeminiReply = async (userInput) => {
+    setIsTyping(true);
+    let chatHistory = [{ role: "user", parts: [{ text: userInput }] }];
+    // Example of including more history:
+    // const recentMessages = messages.slice(-4); // Get last 4 messages (2 user, 2 AI)
+    // chatHistory = recentMessages.map(msg => ({
+    //   role: msg.type === 'user' ? 'user' : 'model',
+    //   parts: [{ text: msg.text }]
+    // }));
+    // chatHistory.push({ role: "user", parts: [{ text: userInput }] });
+
+
+    const payload = { contents: chatHistory };
+    const apiKey = ""; // Canvas will provide the API key in runtime if this is empty
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+    try {
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error("API Error:", errorData);
+        return `Sorry, there was an error with the AI service (HTTP ${response.status}).`;
+      }
+
+      const result = await response.json();
+
+      if (result.candidates && result.candidates.length > 0 &&
+          result.candidates[0].content && result.candidates[0].content.parts &&
+          result.candidates[0].content.parts.length > 0) {
+        return result.candidates[0].content.parts[0].text;
+      } else {
+        console.error("API Error or malformed response:", result);
+        if (result.promptFeedback && result.promptFeedback.blockReason) {
+          return `Your request was blocked: ${result.promptFeedback.blockReason}. Please try a different prompt.`;
+        }
+        return "Sorry, I couldn't get a proper response from the AI.";
+      }
+    } catch (error) {
+      console.error("Failed to fetch AI reply:", error);
+      return "Sorry, I'm having trouble connecting to the AI. Please try again later.";
+    } finally {
+      setIsTyping(false);
+    }
   };
 
   const handleSend = async () => {
@@ -23,21 +85,16 @@ export default function ChatScreen() {
     setInput("");
 
     try {
-      if (audioRef.current && audioRef.current.readyState >= 2) {
-        audioRef.current.currentTime = 0;
-        await audioRef.current.play();
-      }
+      await Tone.start();
+      const synth = new Tone.Synth().toDestination();
+      synth.triggerAttackRelease("C4", "8n");
     } catch (error) {
-      console.error("Audio playback failed:", error);
+      console.error("Tone.js audio playback failed:", error);
     }
 
-    setIsTyping(true);
-    const aiText = await fakeAIReply(userText);
+    const aiText = await getGeminiReply(userText);
     const newAIMessage = { type: "ai", text: aiText };
-    setTimeout(() => {
-      setMessages((prev) => [...prev, newAIMessage]);
-      setIsTyping(false);
-    }, 1000);
+    setMessages((prev) => [...prev, newAIMessage]);
   };
 
   useEffect(() => {
@@ -50,6 +107,7 @@ export default function ChatScreen() {
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         body {
           font-family: 'Inter', sans-serif;
+          overscroll-behavior: none;
         }
         .user-message {
           background: linear-gradient(135deg, #0b84ff 60%, #3b82f6 100%);
@@ -60,6 +118,7 @@ export default function ChatScreen() {
           max-width: 80%;
           box-shadow: 0 2px 12px 0 rgba(11,132,255,0.10);
           animation: popIn 0.18s cubic-bezier(.4,2,.6,1) both;
+          word-wrap: break-word;
         }
         .ai-message {
           background: linear-gradient(135deg, #fff 70%, #f3f4f6 100%);
@@ -70,6 +129,7 @@ export default function ChatScreen() {
           max-width: 80%;
           box-shadow: 0 2px 12px 0 rgba(0,0,0,0.07);
           animation: popIn 0.18s cubic-bezier(.4,2,.6,1) both;
+          word-wrap: break-word;
         }
         @keyframes popIn {
           0% { transform: scale(0.95) translateY(10px); opacity: 0; }
@@ -87,8 +147,18 @@ export default function ChatScreen() {
           color: #0b84ff;
           transform: translateY(-2px) scale(1.07);
         }
+        .chat-messages-container::-webkit-scrollbar {
+            width: 6px;
+        }
+        .chat-messages-container::-webkit-scrollbar-thumb {
+            background-color: #3f3f46; /* zinc-700 */
+            border-radius: 3px;
+        }
+        .chat-messages-container::-webkit-scrollbar-track {
+            background-color: transparent;
+        }
       `}</style>
-      <div className="max-w-lg w-full mx-auto">
+      <div className="max-w-lg w-full mx-auto flex flex-col h-full">
         <div className="text-center mb-6">
           <h1 className="text-3xl font-semibold tracking-tight drop-shadow-sm">Vimal</h1>
           <p className="text-zinc-400 text-base font-medium">
@@ -125,7 +195,7 @@ export default function ChatScreen() {
 
         <hr className="chat-divider" />
 
-        <div className="my-6 space-y-3 min-h-[120px]">
+        <div className="flex-grow overflow-y-auto space-y-3 min-h-[120px] chat-messages-container pr-2">
           {messages.map((msg, idx) => (
             <div
               key={idx}
@@ -141,14 +211,15 @@ export default function ChatScreen() {
           <div ref={messagesEndRef} />
         </div>
 
+        {/* Input form area - Updated className */}
         <form
           onSubmit={(e) => {
             e.preventDefault();
             handleSend();
           }}
-          className="flex items-center mt-6 gap-2 bg-zinc-900/80 border border-zinc-800 rounded-full px-3 py-2 shadow-lg focus-within:ring-2 focus-within:ring-blue-500"
+          className="flex items-center mt-auto gap-2 bg-zinc-900/80 border border-zinc-800 rounded-full px-3 py-2 shadow-lg" // Removed focus-within ring and adjusted padding
         >
-          <Input
+          <ChatInput
             aria-label="Message input"
             placeholder="Type..."
             className="flex-grow bg-transparent border-none text-white placeholder-zinc-500 focus:ring-0 focus:outline-none text-base px-2"
@@ -156,30 +227,26 @@ export default function ChatScreen() {
             onChange={(e) => setInput(e.target.value)}
             autoComplete="off"
           />
-          <Button
+          <ChatButton
             type="submit"
             aria-label="Send message"
             className="ml-1 bg-gradient-to-tr from-blue-500 to-blue-400 text-white font-bold rounded-full px-4 py-2 shadow-md hover:from-blue-600 hover:to-blue-500 focus:ring-2 focus:ring-blue-400 focus:outline-none transition-all"
-            disabled={!input.trim()}
+            disabled={!input.trim() || isTyping}
           >
             <span className="text-lg">➤</span>
-          </Button>
+          </ChatButton>
         </form>
-
-        <div className="mt-10 text-sm text-zinc-500 text-center select-none">
-          <div className="flex justify-center gap-5 mb-2">
-            <a href="mailto:vimalsreal@gmail.com" className="social-link">Email</a>
-            <a href="https://twitter.com/vimalsreal" className="social-link" target="_blank" rel="noopener noreferrer">Twitter</a>
-            <a href="https://www.linkedin.com/in/vimalsreal/" className="social-link" target="_blank" rel="noopener noreferrer">LinkedIn</a>
-            <a href="https://www.instagram.com/vimalsreal/" className="social-link" target="_blank" rel="noopener noreferrer">Instagram</a>
-          </div>
-          <div className="text-xs text-zinc-600">©2025, Vimalsreal</div>
-        </div>
       </div>
-      <audio ref={audioRef} src="/sounds/message-sent.mp3" preload="auto" />
+
+      <div className="mt-10 text-sm text-zinc-500 text-center select-none">
+        <div className="flex justify-center gap-5 mb-2">
+          <a href="mailto:vimalsreal@gmail.com" className="social-link">Email</a>
+          <a href="https://twitter.com/vimalsreal" className="social-link" target="_blank" rel="noopener noreferrer">Twitter</a>
+          <a href="https://www.linkedin.com/in/vimalsreal/" className="social-link" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+          <a href="https://www.instagram.com/vimalsreal/" className="social-link" target="_blank" rel="noopener noreferrer">Instagram</a>
+        </div>
+        <div className="text-xs text-zinc-600">©2025, Vimalsreal</div>
+      </div>
     </div>
   );
 }
-
-
-
